@@ -1,4 +1,5 @@
 ```bash
+
 #!/usr/bin/env bash
 
 # =============================================================================
@@ -7,7 +8,7 @@
 
 # -----------------------------------------------------------------------------
 
-# 功能简介：
+# 功能：
 
 # - 若存在同名清单 <源文件>.txt → 按清单分轨输出 MP3；
 
@@ -33,31 +34,11 @@
 
 # 00:00 - 标题 / 艺术家
 
-# （艺术家可省略；两种格式都可混用）
+# （艺术家可省略；两种格式可混用）
 
 #
 
 # 依赖：ffmpeg、ffprobe （macOS 可：brew install ffmpeg）
-
-#
-
-# 常用示例：
-
-# 单文件（有清单则分轨，无清单则转 MP3）：
-
-# ./media2mp3.sh "/path/a.mp4"
-
-# 转 MP3 并截取第 3 秒为封面：
-
-# ./media2mp3.sh "/path/a.mp4" --thumb-sec 3
-
-# 批量处理目录并统一输出：
-
-# ./media2mp3.sh "/path/media" --out "output" --force
-
-# 分轨使用精确切（重编码）：
-
-# ./media2mp3.sh "/path/a.webm" --reencode
 
 # =============================================================================
 
@@ -79,7 +60,7 @@ need ffprobe
 
   
 
-# ---------- 全局选项（仅作为默认值） ----------
+# ---------- 全局选项（默认值） ----------
 
 ARTIST_DEFAULT=""
 
@@ -104,30 +85,6 @@ cat <<'EOF'
 用法：
 
 media2mp3.sh <文件或目录> [--out DIR] [--thumb-sec N] [--artist A] [--album ALB] [--year Y] [--genre G] [--comment C] [--reencode] [--force]
-
-  
-
-说明：
-
-- 若 <源文件>.txt 存在 → 分轨；否则 → 转为 MP3。
-
-- --out DIR：统一输出目录；未指定时，分轨到同名目录、转换到源目录。
-
-- --thumb-sec N：仅在“无清单转换”时，从第 N 秒截帧作为封面。
-
-- 分轨同名或磁盘已存在同名：默认跳过；--force 才覆盖。
-
-  
-
-示例：
-
-./media2mp3.sh "/path/a.mp4"
-
-./media2mp3.sh "/path/a.mp4" --thumb-sec 3
-
-./media2mp3.sh "/path/media" --out "output" --force
-
-./media2mp3.sh "/path/a.webm" --reencode
 
 EOF
 
@@ -212,8 +169,6 @@ echo "$s"
 }
 
 normalize_cue() {
-
-# 归一化清单（去 BOM、CRLF）
 
 local in="$1" out tmp
 
@@ -309,8 +264,6 @@ local cue="${src}.txt"
 
   
 
-# 总时长
-
 local dur_total
 
 dur_total=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$src" | awk '{printf("%.0f",$1)}') || true
@@ -318,8 +271,6 @@ dur_total=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$src" | 
 [[ "$dur_total" =~ ^[0-9]+$ ]] || { echo "错误：无法获取时长：$src"; return 1; }
 
   
-
-# 源编解码：非 mp3 自动启用重编码
 
 local reenc="$REENCODE" acodec
 
@@ -429,8 +380,6 @@ line_no=$((line_no+1))
 
   
 
-# 归一化
-
 local ts="" rest="" title="" artist="" line_norm
 
 line_norm="$(printf '%s' "$line" | sed $'s/\xef\xbc\x9a/:/g; s/\xc2\xa0/ /g; s/\xe3\x80\x80/ /g')"
@@ -529,29 +478,53 @@ local dur_end_total="${REPEAT_AT:-$dur_total}"
 
   
 
+local i
+
 for ((i=0;i<N;i++)); do
 
-local start="${STARTS_T[$i]}"
+# 显式初始化所有局部临时变量
 
-local next="${STARTS_T[$((i+1))]:-$dur_end_total}"
+local t_start=0 t_next=0 raw_title="" artist_line="" artist_eff="" clean="" base="" out="" dur=0 seen=0 idx=0
 
-[ "$next" -gt "$dur_end_total" ] && next="$dur_end_total"
+  
 
-if [ "$next" -le "$start" ]; then
+t_start="${STARTS_T[$i]}"
 
-echo " 时间异常：$start → $next，跳过"; echo; continue
+  
+
+# 安全求下一段起点：最后一首用 dur_end_total
+
+if [ "$i" -lt $((N-1)) ]; then
+
+t_next="${STARTS_T[$((i+1))]}"
+
+if [ "$t_next" -gt "$dur_end_total" ]; then
+
+t_next="$dur_end_total"
+
+fi
+
+else
+
+t_next="$dur_end_total"
 
 fi
 
   
 
-local raw_title="${TITLES[$i]}"
+if [ "$t_next" -le "$t_start" ]; then
 
-local artist_line="${ARTISTS_LINE[$i]}"
+echo " 时间异常：$t_start → $t_next，跳过"; echo; continue
+
+fi
 
   
 
-local artist_eff
+raw_title="${TITLES[$i]}"
+
+artist_line="${ARTISTS_LINE[$i]}"
+
+  
 
 if [ -n "$artist_line" ]; then artist_eff="$artist_line"
 
@@ -561,8 +534,6 @@ else artist_eff="$ARTIST_DEFAULT"; fi
 
   
 
-local base clean out dur
-
 clean="$(sanitize "$raw_title")"
 
 base="${clean:-Track_$((i+1))}"
@@ -571,15 +542,19 @@ out="$OUT_DIR/${base}.mp3"
 
   
 
-echo " [$((i+1))/$N] $raw_title / $artist_eff (${start}s → ${next}s)"
+echo " [$((i+1))/$N] $raw_title / $artist_eff (${t_start}s → ${t_next}s)"
 
   
 
-# 清单内重复：默认跳过，--force 覆盖上一条（严格不追加 _2/_3）
+# 清单内重复：默认跳过，--force 覆盖上一条
 
-local seen=0 idx
+seen=0
 
-for ((idx=0; idx<${#USED_NAMES[@]}; idx++)); do [ "$base" = "${USED_NAMES[$idx]}" ] && { seen=1; break; }; done
+for ((idx=0; idx<${#USED_NAMES[@]}; idx++)); do
+
+[ "$base" = "${USED_NAMES[$idx]}" ] && { seen=1; break; }
+
+done
 
 if [ "$seen" -eq 1 ]; then
 
@@ -617,27 +592,25 @@ fi
 
   
 
-dur=$(( next - start ))
+dur=$(( t_next - t_start ))
 
 local seek_opts=() enc=() map_opts=() meta=()
 
 if [ "$reenc" -eq 1 ]; then
 
-seek_opts=(-i "$src" -ss "$start" -to "$next")
+seek_opts=(-i "$src" -ss "$t_start" -to "$t_next")
 
 enc=(-c:a libmp3lame -q:a 2)
 
 else
 
-seek_opts=(-ss "$start" -t "$dur" -i "$src")
+seek_opts=(-ss "$t_start" -t "$dur" -i "$src")
 
 enc=(-c copy)
 
 fi
 
   
-
-# 是否复制封面（仅无损拷贝有意义；默认关闭）
 
 local KEEP_ART="${KEEP_ART:-0}"
 
@@ -701,7 +674,7 @@ done
 
   
 
-echo "分轨完成：成功 $ok，失败 ${fail:-0}"
+echo "分轨完成：成功 ${ok:-0}，失败 ${fail:-0}"
 
 return 0
 
@@ -763,8 +736,6 @@ fi
 
   
 
-# 是否有视频流（只有视频且指定了 --thumb-sec 才截帧）
-
 local has_video=0 cover=""
 
 if ffprobe -v error -select_streams v -show_entries stream=index -of csv=p=0 "$src" >/dev/null 2>&1; then
@@ -791,8 +762,6 @@ fi
 
   
 
-# 元数据
-
 local meta=(-id3v2_version 3 -write_id3v2 1 -metadata "title=$base")
 
 [ -n "$ARTIST_PARAM" ] && meta+=(-metadata "artist=$ARTIST_PARAM")
@@ -805,7 +774,7 @@ if [ -n "$GENRE_PARAM" ]; then
 
 meta+=(-metadata "genre=$GENRE_PARAM")
 
-elif [ -n "$GENRE_DEFAULT" ]; then
+elif [ -n "$GENRE_DEFAULT" ] ; then
 
 meta+=(-metadata "genre=$GENRE_DEFAULT")
 
@@ -893,8 +862,6 @@ local path="$1"
 
 if [ -f "$path" ]; then
 
-# 有清单 → 分轨；无清单 → 转 MP3
-
 if split_by_cue "$path"; then
 
 return 0
@@ -903,7 +870,7 @@ else
 
 case $? in
 
-2) convert_to_mp3 "$path" ;; # 无清单
+2) convert_to_mp3 "$path" ;;
 
 *) return 1 ;;
 
@@ -912,8 +879,6 @@ esac
 fi
 
 elif [ -d "$path" ]; then
-
-# 默认不遍历 mp3，避免二次有损；如需可把 mp3 加回扩展列表
 
 local exts=( m4a aac wav flac ogg opus wma mp4 m4v mov webm mkv avi flv ts mpeg mpg ogv )
 
@@ -953,7 +918,7 @@ if process_path "$f"; then ok=$((ok+1)); else fail=$((fail+1)); fi
 
 done
 
-echo "批量完成：成功 $ok，失败 $fail"
+echo "批量完成：成功 ${ok:-0}，失败 ${fail:-0}"
 
 else
 
