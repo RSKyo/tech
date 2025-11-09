@@ -6,16 +6,15 @@
 #   segment_plan.sh <媒体文件> [--segment N]
 #
 # 优先级：
-#   1) 若存在清单文件 <媒体文件>.split.txt → 按清单分段；
-#   2) 否则若提供 --segment N(>0) → 按 N 秒一段拆分；
-#   3) 否则 → 将整个媒体视为一个段。
+#   1) 若存在以“视频ID命名”的清单文件（推荐）：
+#        <id>.list.txt   （与媒体文件同级目录）
+#      其中 id 为媒体文件来源的 YouTube 视频ID（从 comment 中解析）；
+#   2) 否则若存在旧规则清单文件：
+#        <媒体文件>.split.txt
+#   3) 否则若提供 --segment N(>0) → 按 N 秒一段拆分；
+#   4) 否则 → 将整个媒体视为一个段。
 #
-# 清单文件命名：
-#   a.mp4   → a.mp4.split.txt
-#   a.flac  → a.flac.split.txt
-#   a.m4a   → a.m4a.split.txt
-#
-# 清单格式（沿用原“视频转MP3助手.sh”的规则）：
+# 清单格式：
 #   - UTF-8 文本；
 #   - 支持 mm:ss 或 hh:mm:ss(.ms)；
 #   - 行格式示例：
@@ -45,11 +44,14 @@ usage() {
 用法：
   segment_plan.sh <媒体文件> [--segment N]
 
-说明：
-  优先级：
-    1) 若存在清单文件 <媒体文件>.split.txt → 按清单分段；
-    2) 否则若提供 --segment N(>0) → 按 N 秒一段拆分；
-    3) 否则 → 将整个媒体视为一个段。
+说明（优先级）：
+  1) 若存在以“视频ID命名”的清单文件（推荐）：
+       <id>.list.txt   （与媒体文件同级目录）
+     其中 id 为媒体文件来源的 YouTube 视频ID（从 comment 中解析）；
+  2) 否则若存在旧规则清单文件：
+       <媒体文件>.split.txt
+  3) 否则若提供 --segment N(>0) → 按 N 秒一段拆分；
+  4) 否则 → 将整个媒体视为一个段。
 
 输出：
   每行一个分段：
@@ -96,7 +98,6 @@ done
 
 # 总时长（秒，四舍五入为整数秒）
 duration_seconds() {
-  # 如果不是合法媒体或没有 duration，会返回空
   ffprobe -v error -show_entries format=duration -of default=nk=1:nw=1 "$1" 2>/dev/null \
     | awk 'NF {printf "%.0f\n",$1+0}' 2>/dev/null
 }
@@ -130,6 +131,31 @@ normalize_cue() {
     mv "$tmp" "$out"
   fi
   printf '%s\n' "$out"
+}
+
+# 从媒体文件的 comment 标签中获取原始注释（可能包含 YouTube 链接）
+get_comment_from_media() {
+  local src="$1"
+  ffprobe -v error \
+    -show_entries format_tags=comment \
+    -of default=noprint_wrappers=1:nokey=1 \
+    "$src" 2>/dev/null || true
+}
+
+# 从 comment 中提取 YouTube 视频 ID（优先匹配 v=ID，其次 youtu.be/ID）
+extract_id_from_comment() {
+  local comment="$1"
+  local id=""
+
+  # 先尝试匹配 ...v=XXXXXXXXXXX...
+  id=$(printf '%s\n' "$comment" | sed -n 's/.*v=\([A-Za-z0-9_-]\{11\}\).*/\1/p' | head -n1)
+
+  # 若未匹配，再尝试 .../XXXXXXXXXXX...
+  if [ -z "$id" ]; then
+    id=$(printf '%s\n' "$comment" | sed -n 's#.*/\([A-Za-z0-9_-]\{11\}\).*#\1#p' | head -n1)
+  fi
+
+  printf '%s\n' "$id"
 }
 
 # ---------- 构造分段列表：三种来源统一输出 ----------
@@ -169,14 +195,13 @@ build_segments_fixed() {
     end=$(( start + seg ))
     [ "$end" -gt "$total" ] && end="$total"
     idx=$((idx+1))
-    # 标题先用简单命名：原文件名_partXXX
     printf '%s\t%s\t%s\t%s\n' \
       "$start" "$end" "${base}_part$(printf '%03d' "$idx")" ""
     start="$end"
   done
 }
 
-# 3) 按清单切分：<媒体文件>.split.txt
+# 3) 按清单切分：清单文件
 build_segments_cue() {
   local src="$1" cue="$2"
 
@@ -214,7 +239,6 @@ build_segments_cue() {
       return 1
     fi
 
-    # 可选连字符 " - "
     if [[ "$rest" =~ ^[-–—][[:space:]]*(.+)$ ]]; then
       rest="${BASH_REMATCH[1]}"
     fi
@@ -229,7 +253,6 @@ build_segments_cue() {
     ts_sec="$(to_seconds "$ts")"
     title_lc="$(printf '%s' "$title" | tr '[:upper:]' '[:lower:]')"
 
-    # “Repeat/Replay” 作为终止点
     if [[ "$title_lc" == *repeat* || "$title_lc" == *replay* ]]; then
       REPEAT_AT="$ts_sec"
       break
@@ -273,16 +296,36 @@ build_segments_cue() {
 
 # ---------- 主逻辑：按优先级选择 ----------
 main() {
-  local cue="${SRC}.split.txt"
+  local cue=""
+  local src_dir
+  src_dir="$(dirname "$SRC")"
 
-  if [ -f "$cue" ]; then
-    # 情况 1：有清单文件
+  # 1) 尝试根据 comment 中的 YouTube ID 找 <id>.list.txt
+  local comment video_id candidate
+  comment="$(get_comment_from_media "$SRC")"
+  video_id="$(extract_id_from_comment "$comment")"
+
+  if [ -n "$video_id" ]; then
+    candidate="$src_dir/${video_id}.list.txt"
+    if [ -f "$candidate" ]; then
+      cue="$candidate"
+    fi
+  fi
+
+  # 2) 如果没有基于 ID 的清单，则退回旧规则：<媒体文件>.split.txt
+  if [ -z "$cue" ]; then
+    local old_cue="${SRC}.split.txt"
+    if [ -f "$old_cue" ]; then
+      cue="$old_cue"
+    fi
+  fi
+
+  # 3) 根据是否找到清单决定后续逻辑
+  if [ -n "$cue" ]; then
     build_segments_cue "$SRC" "$cue"
   elif [ "$SEGMENT_SEC" -gt 0 ]; then
-    # 情况 2：有 --segment
     build_segments_fixed "$SRC" "$SEGMENT_SEC"
   else
-    # 情况 3：整段
     build_segments_whole "$SRC"
   fi
 }
