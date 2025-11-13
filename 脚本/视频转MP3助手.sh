@@ -119,6 +119,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MEDIA_LIST="$SCRIPT_DIR/media_list.sh"
 MEDIA_SEGMENT_PLAN="$SCRIPT_DIR/media_segment_plan.sh"
 MEDIA_TO_MP3="$SCRIPT_DIR/media_to_mp3.sh"
+YT_GET_SOURCE="$SCRIPT_DIR/yt_get_source.sh"   # 可选：自动获取来源 URL
 
 need_exec() {
   local p="$1" name="$2"
@@ -132,6 +133,13 @@ need_exec "$MEDIA_LIST"         "media_list.sh"
 need_exec "$MEDIA_SEGMENT_PLAN" "media_segment_plan.sh"
 need_exec "$MEDIA_TO_MP3"       "media_to_mp3.sh"
 
+# yt_get_source.sh 非强制依赖：找不到时只提示，不退出
+if [ ! -x "$YT_GET_SOURCE" ]; then
+  echo "提示：未找到 yt_get_source.sh（期望在同目录：$YT_GET_SOURCE），将跳过自动来源 URL" >&2
+  YT_GET_SOURCE=""
+fi
+
+
 # ---------- 单文件处理 ----------
 process_one_media() {
   local src="$1"
@@ -140,6 +148,31 @@ process_one_media() {
     echo "警告：跳过非文件路径：$src" >&2
     return 0
   fi
+
+  
+  # ---------- 自动获取来源 URL（仅当未手动传 --comment 时） ----------
+  local AUTO_COMMENT=""
+  if [ -z "$COMMENT_PARAM" ]; then
+    if [ -x "$YT_GET_SOURCE" ]; then
+      set +e
+      AUTO_COMMENT="$("$YT_GET_SOURCE" "$src" 2>/dev/null)"
+      local status=$?
+      set -e
+      if [ $status -eq 0 ] && [ -n "$AUTO_COMMENT" ]; then
+        echo "  自动识别来源：$AUTO_COMMENT"
+      else
+        echo "  提示：yt_get_source.sh 未能识别来源 URL" >&2
+      fi
+    else
+      echo "  提示：未找到 yt_get_source.sh，无法自动写入来源 URL" >&2
+    fi
+  fi
+
+  if [ ! -f "$src" ]; then
+    echo "警告：跳过非文件路径：$src" >&2
+    return 0
+  fi
+
 
   # 构造 media_segment_plan.sh 调用命令
   local plan_cmd=()
@@ -196,6 +229,10 @@ process_one_media() {
     fi
     if [ -n "$COMMENT_PARAM" ]; then
       cmd+=( --comment "$COMMENT_PARAM" )
+    fi
+    # 若用户没有手动 --comment 且自动 URL 存在，则写入
+    if [ -z "$COMMENT_PARAM" ] && [ -n "$AUTO_COMMENT" ]; then
+      cmd+=( --comment "$AUTO_COMMENT" )
     fi
     if [ -n "$OUT_DIR_OVERRIDE" ]; then
       cmd+=( --out "$OUT_DIR_OVERRIDE" )
