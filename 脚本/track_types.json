@@ -1,0 +1,64 @@
+[
+  {
+    "id": "g",
+    "name": "album_track",
+    "desc": "[任意前缀] + [时间] 曲目号.歌名（翻译/副标题）",
+    "regex": "^.*([0-9]{2}:[0-9]{2}:[0-9]{2})[[:space:]]+([0-9]{2})\\.([^()]+)([[:space:]]*\\(([^)]+)\\))?$",
+    "example": "00:00:00 01.L'écho de Nos Pas (過去的迴響)",
+    "notes": [
+      "严格格式：hh:mm:ss + trackNo.songName + 可选括号附加信息",
+      "括号内使用捕获组，例如 ( ... )，必须为普通捕获组，Bash 不支持非捕获组 (?:...)",
+      "使用 [[:space:]] 而非 \\s，因为 Bash regexp 不支持 \\s",
+      "句点必须转义：\\."
+    ]
+  },
+  {
+    "id": "c",
+    "name": "artist_project_title",
+    "desc": "[任意前缀] + [时间] 艺术家 - 专辑/项目 - 歌名",
+    "regex": "^.*([0-9]{2}:[0-9]{2})[[:space:]]+(.+)[[:space:]]-[[:space:]](.+)[[:space:]]-[[:space:]](.+)$",
+    "example": "00:00 Rautu - Rautu - Close Your Eyes",
+    "notes": [
+      "mm:ss + Artist - Project - Title",
+      "分隔符使用 [[:space:]]-[[:space:]]，允许灵活空格数量",
+      "Bash regexp 不支持前瞻 (?=...) 等 PCRE 特性"
+    ]
+  },
+  {
+    "id": "b",
+    "name": "multi_artist_title",
+    "desc": "[任意前缀] + [时间] 多艺术家 - 歌名",
+    "regex": "^.*([0-9]{2}:[0-9]{2})[[:space:]]+(.+[,&].+)[[:space:]]-[[:space:]](.+)$",
+    "example": "10:58 Ozcvr, Folgore - Lunar",
+    "notes": [
+      "mm:ss + 多艺术家组合（使用逗号或 &）+ - + title",
+      "(.+[,&].+) 匹配多艺术家结构，例如 A, B 或 A & B",
+      "仍遵守 Bash POSIX ERE：不能使用 (?:...)"
+    ]
+  },
+  {
+    "id": "a",
+    "name": "single_artist_title",
+    "desc": "[任意前缀] + [时间] 单艺术家 - 歌名",
+    "regex": "^.*([0-9]{2}:[0-9]{2})[[:space:]]+([^,&]+)[[:space:]]-[[:space:]](.+)$",
+    "example": "03:53 Shibire - Solitude",
+    "notes": [
+      "mm:ss + 单艺术家 + - + title",
+      "artist 名称不能包含 ',' 或 '&'（避免与多艺术家冲突）"
+    ]
+  },
+  {
+    "id": "z",
+    "name": "loose_time_title",
+    "desc": "兜底匹配：[任意前缀] + [时间] + 内容（支持 mm:ss 或 hh:mm:ss）",
+    "regex": "^.*([0-9]{1,2}:[0-9]{2}(:[0-9]{2})?)[[:space:]]+.+$",
+    "example": "00:15 Hayabusahyrrokkin",
+    "remarks": "放在最后兜底（只要时间格式正确，就视为 track line）",
+    "notes": [
+      "支持 mm:ss 或 hh:mm:ss，两者使用普通捕获组 (…) 分离",
+      "内部的 (:...) 不是非捕获组，是真实捕获组，符合 Bash POSIX ERE",
+      "Bash 不支持 ?: 前缀，因此不能写成 (?: ... )",
+      "使用 .+ 捕获任意内容"
+    ]
+  }
+]
