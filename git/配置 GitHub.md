@@ -84,11 +84,26 @@ ssh -T git@github.com
 Hi xxx! You've successfully authenticated...
 ```
 4、把你的本地仓库改为 SSH URL
-你的仓库应该现在是 HTTPS：
-```arduino
-https://github.com/xxx/tech.git
+查看本地仓库的连接状态：
+```shell
+git remote -v
 ```
-现在改为 SSH
+你会看到类似：
+```shell
+origin  https://github.com/你的用户名/xxx.git (fetch)
+origin  https://github.com/你的用户名/xxx.git (push)
+```
+或者：
+```shell
+origin  git@github.com:你的用户名/xxx.git (fetch)
+origin  git@github.com:你的用户名/xxx.git (push)
+```
+只会是其中一种，不会同时存在。
+如果是 HTTPS 的方式，则改为 SSH：
 ```bash
-git remote set-url origin git@github.com:你的用户名/tech.git
+git remote set-url origin git@github.com:你的用户名/xxx.git
+```
+5、克隆远程仓库：
+```shell
+git clone git@github.com:你的用户名/xxx.git
 ```
