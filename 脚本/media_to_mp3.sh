@@ -233,7 +233,7 @@ fi
 
 
 if ffmpeg -nostdin -hide_banner -loglevel error -y \
-     "${seek_opts[@]}" -vn -map 0:a:0 \
+     "${seek_opts[@]}" -map_metadata -1 -vn -map 0:a:0 \
      -c:a libmp3lame -q:a 2 \
      "${meta_opts[@]}" \
      "$OUT_PATH"

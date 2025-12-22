@@ -44,6 +44,7 @@
 #   - media_segment_plan.sh      （必需：生成分段计划）
 #   - media_to_mp3.sh            （必需：执行实际转码）
 #   - media_find_tracklist.sh    （可选：自动查找 tracklist）
+#   - video_metadata.sh          （可选：自动提取来源 URL 作为 comment）
 #
 # 用法
 #   视频转MP3助手.sh <文件或目录>
@@ -51,6 +52,10 @@
 #     [--tracklist FILE]
 #     [--segment N]
 #     [--out DIR]
+#     [--artist A]
+#     [--album ALB]
+#     [--year Y]
+#     [--genre G]
 #     [--comment C]
 #     [--reencode]
 #     [--force]
@@ -60,11 +65,10 @@
 set -Eeo pipefail
 
 IFS=$'\n\t'
-DEBUG=0
 
-# =============================================================================
-# 1) 基础：路径与依赖检查
-# =============================================================================
+# -----------------------------------------------------------------------------
+# 基础：路径与依赖检查
+# -----------------------------------------------------------------------------
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 MEDIA_LIST="$SCRIPT_DIR/media_list.sh"
@@ -73,11 +77,7 @@ MEDIA_TO_MP3="$SCRIPT_DIR/media_to_mp3.sh"
 
 # 可选依赖
 MEDIA_FIND_TRACKLIST="$SCRIPT_DIR/media_find_tracklist.sh"
-
-debug() {
-  [ "$DEBUG" = "1" ] || return 0
-  printf '    CMD:'; printf ' %q' "$@"; echo
-}
+VIDEO_METADATA="$SCRIPT_DIR/video_metadata.sh"
 
 need_exec() {
   local p="$1" name="$2"
@@ -103,6 +103,10 @@ usage() {
     [--tracklist FILE]
     [--segment N]
     [--out DIR]
+    [--artist A]
+    [--album ALB]
+    [--year Y]
+    [--genre G]
     [--comment C]
     [--reencode]
     [--force]
@@ -118,51 +122,13 @@ need_exec "$MEDIA_TO_MP3"       "media_to_mp3.sh"
 if [ ! -x "$MEDIA_FIND_TRACKLIST" ]; then
   MEDIA_FIND_TRACKLIST=""
 fi
+if [ ! -x "$VIDEO_METADATA" ]; then
+  VIDEO_METADATA=""
+fi
 
-
-# =============================================================================
-# 2) URL extraction helpers（轻量级元信息推断）
-# =============================================================================
-extract_url_from_text() {
-  local text="${1:-}"
-  [[ -z "$text" ]] && return 0
-
-  printf '%s\n' "$text" \
-    | grep -Eo 'https?://[^[:space:]"'"'"'<>()]+' \
-    | head -n 1 || true
-}
-
-get_url_from_wherefroms() {
-  local file="$1"
-
-  command -v mdls >/dev/null 2>&1 || return 0
-
-  local raw
-  raw="$(mdls -name kMDItemWhereFroms -raw "$file" 2>/dev/null || true)"
-
-  [[ -z "$raw" || "$raw" == "(null)" ]] && return 0
-  extract_url_from_text "$raw"
-}
-
-
-get_url_from_ffprobe_tags() {
-  local file="$1"
-
-  local tags_text
-  tags_text="$(ffprobe -v error \
-    -show_entries format_tags \
-    -of default=noprint_wrappers=1:nokey=1 \
-    "$file" 2>/dev/null || true)"
-
-  [[ -z "$tags_text" ]] && return 0
-  extract_url_from_text "$tags_text"
-}
-
-
-
-# =============================================================================
-# 3) Command builders（只构造 argv 数组，不直接执行）
-# =============================================================================
+# -----------------------------------------------------------------------------
+# build_cmd_*（模式 B：local -n）
+# -----------------------------------------------------------------------------
 build_cmd_media_list() {
   local -n _out="$1"
   local dir="$2"
@@ -175,10 +141,17 @@ build_cmd_media_list() {
   fi
 }
 
+
 build_cmd_media_find_tracklist() {
   local -n _out="$1"
   local src="$2"
   _out=( "$MEDIA_FIND_TRACKLIST" "$src" )
+}
+
+build_cmd_video_metadata() {
+  local -n _out="$1"
+  local src="$2"
+  _out=( "$VIDEO_METADATA" "$src" )
 }
 
 build_cmd_media_segment_plan() {
@@ -208,6 +181,10 @@ build_cmd_media_to_mp3() {
 
   # 下面这些都是“可选值”，没传就默认为空/0
   local title="${1-}"; shift || true
+  local artist="${1-}"; shift || true
+  local album="${1-}"; shift || true
+  local year="${1-}"; shift || true
+  local genre="${1-}"; shift || true
   local comment="${1-}"; shift || true
   local out_dir="${1-}"; shift || true
   local reencode="${1-0}"; shift || true
@@ -217,6 +194,18 @@ build_cmd_media_to_mp3() {
 
   if [ -n "$title" ]; then
     _out+=( --title "$title" )
+  fi
+  if [ -n "$artist" ]; then
+    _out+=( --artist "$artist" )
+  fi
+  if [ -n "$album" ]; then
+    _out+=( --album "$album" )
+  fi
+  if [ -n "$year" ]; then
+    _out+=( --year "$year" )
+  fi
+  if [ -n "$genre" ]; then
+    _out+=( --genre "$genre" )
   fi
   if [ -n "$comment" ]; then
     _out+=( --comment "$comment" )
@@ -235,9 +224,9 @@ build_cmd_media_to_mp3() {
 }
 
 
-# =============================================================================
-# 4) 参数解析（解析 + 校验）
-# =============================================================================
+# -----------------------------------------------------------------------------
+# 参数解析
+# -----------------------------------------------------------------------------
 [ $# -ge 1 ] || { usage; exit 1; }
 
 TARGET=""
@@ -248,6 +237,10 @@ SEGMENT_SEC=0
 TRACKLIST_FILE=""
 
 OUT_DIR_OVERRIDE=""
+ARTIST_PARAM=""
+ALBUM_PARAM=""
+YEAR_PARAM=""
+GENRE_PARAM=""
 COMMENT_PARAM=""
 REENCODE=0
 FORCE=0
@@ -284,6 +277,10 @@ while [ $# -gt 0 ]; do
       SEGMENT_SEC="$1"
       ;;
     --out)       shift; OUT_DIR_OVERRIDE="${1:-}" ;;
+    --artist)    shift; ARTIST_PARAM="${1:-}" ;;
+    --album)     shift; ALBUM_PARAM="${1:-}" ;;
+    --year)      shift; YEAR_PARAM="${1:-}" ;;
+    --genre)     shift; GENRE_PARAM="${1:-}" ;;
     --comment)   shift; COMMENT_PARAM="${1:-}" ;;
     --reencode)  REENCODE=1 ;;
     --force)     FORCE=1 ;;
@@ -319,10 +316,14 @@ if [ -n "$TRACKLIST_FILE" ] && [ ! -f "$TRACKLIST_FILE" ]; then
   exit 1
 fi
 
+# -----------------------------------------------------------------------------
+# 小工具：打印命令（调试用，默认不启用）
+# -----------------------------------------------------------------------------
+# print_cmd() { printf 'CMD: %q ' "$@"; echo; }
 
-# =============================================================================
-# 5) Resolver helpers（根据上下文推断可选信息）
-# =============================================================================
+# -----------------------------------------------------------------------------
+# 单文件处理
+# -----------------------------------------------------------------------------
 resolve_tracklist_for_src() {
   local src="$1"
 
@@ -350,7 +351,7 @@ resolve_tracklist_for_src() {
 }
 
 resolve_auto_comment_for_src() {
-  local file="$1"
+  local src="$1"
 
   # 若用户显式传 --comment，则完全不自动推断
   if [ -n "$COMMENT_PARAM" ]; then
@@ -358,20 +359,32 @@ resolve_auto_comment_for_src() {
     return 0
   fi
 
-  local url=""
-  url="$(get_url_from_wherefroms "$file")"
-
-  if [ -z "$url" ]; then
-    url="$(get_url_from_ffprobe_tags "$file")"
+  # 若 video_metadata.sh 不存在，则无法自动推断
+  if [ -z "$VIDEO_METADATA" ]; then
+    printf '%s\n' ""
+    return 0
   fi
+
+  local cmd=()
+  build_cmd_video_metadata cmd "$src"
+
+  local meta_json=""
+  set +e
+  meta_json="$("${cmd[@]}" 2>/dev/null)"
+  set -e
+
+  if [ -z "$meta_json" ]; then
+    printf '%s\n' ""
+    return 0
+  fi
+
+  # 你已要求：缺失字段返回空字符串，而不是 null
+  local url=""
+  url="$(printf '%s' "$meta_json" | jq -r '.url' 2>/dev/null || true)"
 
   printf '%s\n' "${url:-}"
 }
 
-
-# =============================================================================
-# 6) Orchestration logic（核心流程）
-# =============================================================================
 process_one_media() {
   local src="$1"
 
@@ -380,7 +393,7 @@ process_one_media() {
     return 0
   fi
 
-  # 自动 comment（来自 WhereFroms / ffprobe tags）
+  # 自动 comment（来自 video_metadata.url）
   local auto_comment=""
   auto_comment="$(resolve_auto_comment_for_src "$src")"
   if [ -n "$auto_comment" ]; then
@@ -395,7 +408,7 @@ process_one_media() {
   local plan_cmd=()
   build_cmd_media_segment_plan plan_cmd "$src" "$tracklist_eff" "$SEGMENT_SEC"
 
-  debug "${plan_cmd[@]}"
+printf '    CMD:'; printf ' %q' "${plan_cmd[@]}"; echo
 
   local plan_json=""
   if ! plan_json="$("${plan_cmd[@]}")"; then
@@ -423,19 +436,19 @@ process_one_media() {
     local seg
     seg="$(printf '%s' "$plan_json" | jq -c ".[$idx]")"
 
-    local start end title
+    # seg 内字段：start/end/title/artist（目前 media_segment_plan 已输出 string/number；缺失用 ""）
+    local start end title artist
     start="$(printf '%s' "$seg" | jq -r '.start' 2>/dev/null || echo 0)"
     end="$(printf '%s' "$seg" | jq -r '.end' 2>/dev/null || echo 0)"
-    start_raw="$(printf '%s' "$seg" | jq -r '.start_raw // empty' 2>/dev/null)"
-    end_raw="$(printf '%s' "$seg" | jq -r '.end_raw // empty' 2>/dev/null)"
     title="$(printf '%s' "$seg" | jq -r '.title' 2>/dev/null || echo "")"
+    artist="$(printf '%s' "$seg" | jq -r '.artist' 2>/dev/null || echo "")"
 
     local seg_no=$((idx + 1))
-    if [[ -n "$start_raw" && -n "$end_raw" ]]; then
-      echo "  > seg ${seg_no}/${total_seg} ${start_raw} → ${end_raw} ${title}"
-    else
-      echo "  > seg ${seg_no}/${total_seg} ${start}s → ${end}s ${title}"
-    fi
+    echo "  > seg ${seg_no}/${total_seg} ${start}s → ${end}s"
+
+    # artist 优先级：seg.artist > 全局 --artist
+    local artist_eff="$ARTIST_PARAM"
+    [ -n "$artist" ] && artist_eff="$artist"
 
     # comment 优先级：全局 --comment > auto_comment(来源URL) > 空
     local comment_eff="$COMMENT_PARAM"
@@ -450,6 +463,10 @@ process_one_media() {
       "$start" \
       "$end" \
       "$title" \
+      "$artist_eff" \
+      "$ALBUM_PARAM" \
+      "$YEAR_PARAM" \
+      "$GENRE_PARAM" \
       "$comment_eff" \
       "$OUT_DIR_OVERRIDE" \
       "$REENCODE" \
@@ -463,6 +480,9 @@ process_one_media() {
   done
 }
 
+# -----------------------------------------------------------------------------
+# 目录处理
+# -----------------------------------------------------------------------------
 process_dir() {
   local dir="$1"
   echo "扫描目录：$dir"
@@ -471,6 +491,7 @@ process_dir() {
   else
     echo "类型过滤：<未指定>（使用 media_list.sh 的默认策略）"
   fi
+
 
   local list_cmd=()
   build_cmd_media_list list_cmd "$dir" "$TYPE"
@@ -494,10 +515,9 @@ process_dir() {
   done
 }
 
-
-# =============================================================================
-# 7) 主入口
-# =============================================================================
+# -----------------------------------------------------------------------------
+# 主入口
+# -----------------------------------------------------------------------------
 if [ -f "$TARGET" ]; then
   echo "1/1 $TARGET"
   process_one_media "$TARGET"
