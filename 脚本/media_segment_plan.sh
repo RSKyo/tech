@@ -3,35 +3,96 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+#!/usr/bin/env bash
+set -euo pipefail
+
 # ==============================================================================
 # media_segment_plan.sh
 # ------------------------------------------------------------------------------
-# Purpose:
-#   Generate a segmentation plan (JSON array) for a media file, used by ffmpeg.
+# 功能说明：
+#   为指定媒体文件生成「分段计划（Segment Plan）」的 JSON 输出，
+#   供后续 ffmpeg 或其他处理流程使用。
 #
-# Modes (priority high -> low):
-#   1) --tracklist <file> : Parse a tracklist text file and generate segments.
-#      - Only the LAST line is checked for repeat|replay as a loop marker.
-#      - If last line contains repeat|replay, its time is treated as the end time
-#        of the final segment; anything after it is ignored.
-#      - Middle lines are never treated as loop markers.
-#      - Output fields include start/end (seconds) + start_raw/end_raw (time string).
+#   输出结果是一个 JSON 数组，每一项描述一个分段：
+#     - start / end       : 数值秒（用于计算与切割）
+#     - start_raw / end_raw（仅 tracklist 模式）:
+#                           原始时间字符串（用于展示、回写、调试）
+#     - title / artist    : 曲目信息
 #
-#   2) --segment <N> : Split into fixed-length segments (seconds).
-#   3) default       : Output a single full-length segment.
+# ------------------------------------------------------------------------------
+# 使用模式（优先级从高到低）：
 #
-# Dependencies:
-#   - jq, bc, ffprobe (via video_metadata.sh)
-#   - video_metadata.sh, _json_get.sh, parse_tracklist.sh
+#   1) --tracklist <file>
+#      使用 tracklist 文本文件生成分段计划（推荐模式）。
+#
+#      tracklist 解析规则（重要约定）：
+#      - 只检查「最后一行」是否包含 repeat 或 replay（大小写不敏感）：
+#          * 如果包含：
+#              - 该行被视为“循环起点标记行”
+#              - 该行的 time 作为「上一段的结束时间」
+#              - 该行本身不会生成 segment
+#              - 后续内容一律忽略
+#          * 如果不包含：
+#              - 最后一段自然结束于视频总时长
+#      - tracklist 中间行即使包含 repeat / replay，
+#        一律视为普通标题文本，不参与循环判断。
+#
+#      时间规则：
+#      - 每一段的 end 必须严格大于 start；
+#        若出现非递增时间，脚本会直接报错退出。
+#
+#      输出字段：
+#      - start / end       : 秒（number）
+#      - start_raw / end_raw : 原始时间字符串（MM:SS / HH:MM:SS）
+#      - title / artist
+#
+#   2) --segment <N>
+#      按固定秒数 N 对视频进行切割。
+#      - 不使用 tracklist
+#      - 不输出 start_raw / end_raw（保持原有结构）
+#
+#   3) 无参数
+#      输出整段视频（0 → duration）的单一 segment。
+#
+# ------------------------------------------------------------------------------
+# 元信息来源：
+#   - video_metadata.sh
+#       * 输出 JSON，至少包含：
+#           - duration : 视频总时长（秒，可能带小数）
+#           - title    : 视频标题
+#           - artist   : 视频作者/艺术家（可选）
+#
+# ------------------------------------------------------------------------------
+# 依赖环境：
+#   - bash（支持 set -euo pipefail）
+#   - jq
+#   - bc
+#   - ffprobe（由 video_metadata.sh 内部使用）
+#
+# 依赖脚本：
+#   - video_metadata.sh
+#   - parse_tracklist.sh
+#
+# ------------------------------------------------------------------------------
+# 设计目标：
+#   - 逻辑清晰、规则显式
+#   - 数值时间与原始字符串时间分离
+#   - repeat/replay 语义只在最后一行生效，避免误判
+#   - 便于长期维护与二次扩展
 # ==============================================================================
+
 
 # ------------------------------------------------------------------------------
 # Preconditions
 # ------------------------------------------------------------------------------
+die() {
+  echo "Error: $*" >&2
+  exit 1
+}
+
 require_executables() {
   local scripts=(
     "video_metadata.sh"
-    "_json_get.sh"
     "parse_tracklist.sh"
   )
 
@@ -42,11 +103,9 @@ require_executables() {
       exit 1
     fi
   done
-}
 
-die() {
-  echo "Error: $*" >&2
-  exit 1
+  command -v jq >/dev/null 2>&1 || die "缺少依赖命令: jq"
+  command -v bc >/dev/null 2>&1 || die "缺少依赖命令: bc"
 }
 
 # ------------------------------------------------------------------------------
@@ -133,23 +192,25 @@ load_video_meta() {
   local meta_json
   meta_json=$("$SCRIPT_DIR/video_metadata.sh" "$VIDEO_FILE")
 
+  # Extract multiple fields in a single jq call; output as TSV for stable read.
   read -r duration video_title video_artist < <(
-    "$SCRIPT_DIR/_json_get.sh" \
-      --json "$meta_json" \
-      --key duration \
-      --key title \
-      --key artist
+    jq -r '[.duration, .title, .artist] | @tsv' <<<"$meta_json"
   )
 
-  if [[ "$video_artist" == "null" ]] || [[ -z "$video_artist" ]]; then
+  [[ -n "$duration" && "$duration" != "null" ]] || die "无法从 video_metadata 中获取 duration"
+
+  if [[ "$video_title" == "null" ]]; then
+    video_title=""
+  fi
+  if [[ "$video_artist" == "null" ]]; then
     video_artist=""
   fi
 }
 
 # ------------------------------------------------------------------------------
-# JSON helpers
+# JSON plan helpers
 # ------------------------------------------------------------------------------
-append_plan_entry() {
+append_plan_entry_with_raw() {
   local start_sec="$1"
   local end_sec="$2"
   local start_raw="$3"
@@ -177,23 +238,38 @@ append_plan_entry() {
   plan_entries=$(echo "$plan_entries" | jq --argjson item "$line" '. += [$item]')
 }
 
+append_plan_entry_basic() {
+  local start="$1"
+  local end="$2"
+  local title="$3"
+  local artist="$4"
+
+  local line
+  line=$(jq -n \
+    --arg start "$start" \
+    --arg end "$end" \
+    --arg title "$title" \
+    --arg artist "$artist" \
+    '{start: ($start|tonumber), end: ($end|tonumber), title: $title, artist: $artist}')
+
+  plan_entries=$(echo "$plan_entries" | jq --argjson item "$line" '. += [$item]')
+}
+
 # ------------------------------------------------------------------------------
 # Tracklist mode
 # ------------------------------------------------------------------------------
 tracklist_get_effective_range() {
-  # Outputs:
+  # Outputs (globals):
   #   effective_len, has_loop, loop_time
-  # Rules:
-  #   Only the LAST line is checked for repeat|replay.
-  #   If present: that last line is a loop marker and excluded from segment list.
-  #              loop_time is used as the end time of the final segment.
+  # Rule:
+  #   Only LAST line is checked for repeat|replay; middle lines are ignored.
   local tl_json="$1"
   local length="$2"
 
   has_loop=0
   loop_time=""
-
   effective_len="$length"
+
   if (( length <= 0 )); then
     return 0
   fi
@@ -204,16 +280,14 @@ tracklist_get_effective_range() {
 
   if echo "$loop_raw" | grep -qiE 'repeat|replay'; then
     loop_time=$(echo "$last" | jq -r '.time // "null"')
-    if [[ "$loop_time" == "null" || -z "$loop_time" ]]; then
-      die "最后一行包含 repeat|replay 但缺少 time（无法确定上一段结束时间）"
-    fi
+    [[ "$loop_time" != "null" && -n "$loop_time" ]] || die "最后一行包含 repeat|replay 但缺少 time（无法确定上一段结束时间）"
     has_loop=1
     effective_len=$((length - 1))
   fi
 }
 
 tracklist_pick_artist() {
-  # Choose artist with the following priority:
+  # Priority:
   #   1) artists[] joined by ", "
   #   2) artist
   #   3) fallback video_artist
@@ -255,11 +329,7 @@ tracklist_build_plan() {
     [[ "$start_raw" != "null" && -n "$start_raw" ]] || die "tracklist 中发现 time=null（无法确定开始时间）"
     start_sec="$(to_seconds "$start_raw")"
 
-    # End time:
-    # - if not last: next entry time
-    # - if last:
-    #     - has_loop: loop_time
-    #     - else: duration
+    # End time
     local end_raw end_sec
     if (( i < effective_len - 1 )); then
       local next next_t
@@ -288,7 +358,7 @@ tracklist_build_plan() {
     title=$(echo "$entry" | jq -r '.title // .name // ""')
     final_artist="$(tracklist_pick_artist "$entry")"
 
-    append_plan_entry "$start_sec" "$end_sec" "$start_raw" "$end_raw" "$title" "$final_artist"
+    append_plan_entry_with_raw "$start_sec" "$end_sec" "$start_raw" "$end_raw" "$title" "$final_artist"
   done
 
   echo "$plan_entries"
@@ -315,17 +385,7 @@ segment_build_plan() {
     fi
 
     local part_title="${video_title} (Part ${idx})"
-
-    # Keep output structure unchanged for segment mode (no start_raw/end_raw).
-    local line
-    line=$(jq -n \
-      --arg start "$start" \
-      --arg end "$end" \
-      --arg title "$part_title" \
-      --arg artist "$video_artist" \
-      '{start: ($start|tonumber), end: ($end|tonumber), title: $title, artist: $artist}')
-
-    plan_entries=$(echo "$plan_entries" | jq --argjson item "$line" '. += [$item]')
+    append_plan_entry_basic "$start" "$end" "$part_title" "$video_artist"
 
     start=$end
     idx=$((idx+1))
@@ -338,7 +398,6 @@ segment_build_plan() {
 # Full mode
 # ------------------------------------------------------------------------------
 full_build_plan() {
-  # Keep output structure unchanged for full mode (no start_raw/end_raw).
   jq -n \
     --arg start "0" \
     --arg end "$duration" \
@@ -352,9 +411,9 @@ full_build_plan() {
   }]'
 }
 
-# ==============================================================================
+# ------------------------------------------------------------------------------
 # Main
-# ==============================================================================
+# ------------------------------------------------------------------------------
 main() {
   require_executables
   parse_args "$@"
