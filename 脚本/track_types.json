@@ -3,7 +3,7 @@
     "id": "g",
     "name": "album_track",
     "desc": "[任意前缀] + [时间] 曲目号.歌名（翻译/副标题）",
-    "regex": "^.*([0-9]{2}:[0-9]{2}:[0-9]{2})[[:space:]]+([0-9]{2})\\.([^()]+)([[:space:]]*\\(([^)]+)\\))?$",
+    "regex": "(^|.*[^0-9])([0-9]{1,2}:[0-9]{2}:[0-9]{2})[[:space:]]+([0-9]{2})\\.([^()]+)([[:space:]]*\\(([^)]+)\\))?$",
     "example": "00:00:00 01.L'écho de Nos Pas (過去的迴響)",
     "notes": [
       "严格格式：hh:mm:ss + trackNo.songName + 可选括号附加信息",
@@ -16,7 +16,7 @@
     "id": "c",
     "name": "artist_project_title",
     "desc": "[任意前缀] + [时间] 艺术家 - 专辑/项目 - 歌名",
-    "regex": "^.*([0-9]{2}:[0-9]{2})[[:space:]]+(.+)[[:space:]]-[[:space:]](.+)[[:space:]]-[[:space:]](.+)$",
+    "regex": "(^|.*[^0-9])([0-9]{1,2}:[0-9]{2})[[:space:]]+(.+)[[:space:]]-[[:space:]](.+)[[:space:]]-[[:space:]](.+)$",
     "example": "00:00 Rautu - Rautu - Close Your Eyes",
     "notes": [
       "mm:ss + Artist - Project - Title",
@@ -28,7 +28,7 @@
     "id": "b",
     "name": "multi_artist_title",
     "desc": "[任意前缀] + [时间] 多艺术家 - 歌名",
-    "regex": "^.*([0-9]{2}:[0-9]{2})[[:space:]]+(.+[,&].+)[[:space:]]-[[:space:]](.+)$",
+    "regex": "(^|.*[^0-9])([0-9]{1,2}:[0-9]{2})[[:space:]]+(.+[,&].+)[[:space:]]-[[:space:]](.+)$",
     "example": "10:58 Ozcvr, Folgore - Lunar",
     "notes": [
       "mm:ss + 多艺术家组合（使用逗号或 &）+ - + title",
@@ -40,7 +40,7 @@
     "id": "a",
     "name": "single_artist_title",
     "desc": "[任意前缀] + [时间] 单艺术家 - 歌名",
-    "regex": "^.*([0-9]{2}:[0-9]{2})[[:space:]]+([^,&]+)[[:space:]]-[[:space:]](.+)$",
+    "regex": "(^|.*[^0-9])([0-9]{1,2}:[0-9]{2})[[:space:]]+([^,&]+)[[:space:]]-[[:space:]](.+)$",
     "example": "03:53 Shibire - Solitude",
     "notes": [
       "mm:ss + 单艺术家 + - + title",
@@ -51,7 +51,7 @@
     "id": "z",
     "name": "loose_time_title",
     "desc": "兜底匹配：[任意前缀] + [时间] + 内容（支持 mm:ss 或 hh:mm:ss）",
-    "regex": "^.*([0-9]{1,2}:[0-9]{2}(:[0-9]{2})?)[[:space:]]+.+$",
+    "regex": "(^|.*[^0-9])([0-9]{1,2}:[0-9]{2}(:[0-9]{2})?)[[:space:]]+.+$",
     "example": "00:15 Hayabusahyrrokkin",
     "remarks": "放在最后兜底（只要时间格式正确，就视为 track line）",
     "notes": [

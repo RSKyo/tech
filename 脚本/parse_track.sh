@@ -155,11 +155,12 @@ build_artists_json() {
 case "$id" in
   g)
     # album_track
-    # regex: .*([hh:mm:ss]) + track_no + title (+ optional subtitle)
-    time="${BASH_REMATCH[1]}"
-    track_no="${BASH_REMATCH[2]}"
-    title="$(echo "${BASH_REMATCH[3]}" | sed 's/[[:space:]]*$//')"
-    subtitle="${BASH_REMATCH[5]:-}"
+    # regex: (prefix-boundary)(hh:mm:ss) + track_no + title (+ optional subtitle)
+    # 注意：track_types.json 已新增一个捕获组 (^|.*[^0-9])，因此各组下标整体后移 1
+    time="${BASH_REMATCH[2]}"
+    track_no="${BASH_REMATCH[3]}"
+    title="$(echo "${BASH_REMATCH[4]}" | sed 's/[[:space:]]*$//')"
+    subtitle="${BASH_REMATCH[6]:-}"
 
     jq -n \
       --arg type "$id" \
@@ -192,11 +193,11 @@ case "$id" in
 
   c)
     # artist_project_title
-    # time artist - album - title
-    time="${BASH_REMATCH[1]}"
-    artist="${BASH_REMATCH[2]}"
-    album="${BASH_REMATCH[3]}"
-    title="${BASH_REMATCH[4]}"
+    # (prefix-boundary)(mm:ss) artist - album - title
+    time="${BASH_REMATCH[2]}"
+    artist="${BASH_REMATCH[3]}"
+    album="${BASH_REMATCH[4]}"
+    title="${BASH_REMATCH[5]}"
 
     artists_json=$(build_artists_json "$artist")
 
@@ -227,10 +228,10 @@ case "$id" in
 
   b)
     # multi_artist_title
-    # time artist_list - title
-    time="${BASH_REMATCH[1]}"
-    artist="${BASH_REMATCH[2]}"
-    title="${BASH_REMATCH[3]}"
+    # (prefix-boundary)(mm:ss) artist_list - title
+    time="${BASH_REMATCH[2]}"
+    artist="${BASH_REMATCH[3]}"
+    title="${BASH_REMATCH[4]}"
 
     artists_json=$(build_artists_json "$artist")
 
@@ -260,10 +261,10 @@ case "$id" in
 
   a)
     # single_artist_title
-    # time artist - title
-    time="${BASH_REMATCH[1]}"
-    artist="${BASH_REMATCH[2]}"
-    title="${BASH_REMATCH[3]}"
+    # (prefix-boundary)(mm:ss) artist - title
+    time="${BASH_REMATCH[2]}"
+    artist="${BASH_REMATCH[3]}"
+    title="${BASH_REMATCH[4]}"
 
     artists_json=$(build_artists_json "$artist")
 
@@ -294,7 +295,7 @@ case "$id" in
   z)
     # loose_time_title（兜底：时间 + 内容）
     # 只保证 time，剩下当成 title
-    time="${BASH_REMATCH[1]}"
+    time="${BASH_REMATCH[2]}"
     # 从时间后面截取剩余文本作为 title
     rest="${LINE#*$time}"
     rest="$(echo "$rest" | sed 's/^[[:space:]]*//')"
