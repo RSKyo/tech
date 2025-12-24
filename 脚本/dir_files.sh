@@ -161,7 +161,6 @@ fi
 count=0
 
 emit() {
-  ((count++))
   [ "$COUNT_ONLY" -eq 1 ] && return
 
   if [ "$NAME_ONLY" -eq 1 ]; then
@@ -172,17 +171,23 @@ emit() {
 }
 
 scan_files() {
-  local f ext e
+  local f
 
   if [ "$RECURSIVE" -eq 1 ]; then
     while IFS= read -r f; do
       handle_file "$f"
+      if [ "$COUNT_ONLY" -eq 1 ]; then
+        ((count++))
+      fi
     done < <(find "$DIR" -type f)
   else
     shopt -s nullglob
     for f in "$DIR"/*; do
       [ -f "$f" ] || continue
       handle_file "$f"
+      if [ "$COUNT_ONLY" -eq 1 ]; then
+        ((count++))
+      fi
     done
     shopt -u nullglob
   fi
@@ -199,11 +204,18 @@ handle_file() {
   [[ "$f" == *.* ]] || return
   ext="$(to_lower "${f##*.}")"
 
+  [ "${#exts[@]}" -gt 0 ] || return
+
   for e in "${exts[@]}"; do
-    [ "$ext" = "$e" ] && { emit "$f"; return; }
+    if [ "$ext" = "$e" ]; then
+      emit "$f"
+      return
+    fi
   done
+
 }
 
 scan_files
 
 [ "$COUNT_ONLY" -eq 1 ] && printf '%d\n' "$count"
+exit 0
