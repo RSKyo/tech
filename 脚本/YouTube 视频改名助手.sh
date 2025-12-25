@@ -20,7 +20,7 @@ SANITIZER="$SCRIPT_DIR/sanitize_filename.sh"
 INPUT=""
 OFFLINE=0
 RECURSIVE=0
-TYPE="media"
+TYPE="video"
 
 usage() {
   cat <<EOF
@@ -30,7 +30,7 @@ usage() {
 选项：
   --offline        不联网获取 title
   --recursive      递归扫描目录
-  --type media     dir_files.sh 的 --type（默认 media）
+  --type video     dir_files.sh 的 --type（默认 video）
 EOF
 }
 
