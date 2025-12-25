@@ -131,6 +131,7 @@ command -v "$YTDLP_BIN" >/dev/null 2>&1 \
 description="$(
   "$YTDLP_BIN" \
     --print description \
+    --no-playlist \
     --no-warnings \
     "$INPUT_URL" \
     2>/dev/null || true

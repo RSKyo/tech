@@ -1,195 +1,213 @@
 #!/usr/bin/env bash
-# =============================================================================
-# YouTube 视频改名助手.sh
-# -----------------------------------------------------------------------------
-# 功能概述
-#   一个“基于来源 URL 的批量视频改名”编排脚本。
-#
-#   本脚本本身不解析视频来源、不提取 ID，也不决定是否改名，
-#   仅负责：
-#     - 接收文件或目录输入
-#     - 在目录模式下通过 media_list.sh 枚举媒体文件
-#     - 对每个文件调用 yt_rename_with_id.sh 执行实际改名
-#
-# 工作模式
-#   1) 单文件模式
-#      - 输入：单个媒体文件
-#      - 行为：
-#          * 直接调用 yt_rename_with_id.sh
-#
-#   2) 目录模式
-#      - 输入：目录路径
-#      - 行为：
-#          a. 调用 media_list.sh 列出目录中的媒体文件
-#          b. 对每个文件调用 yt_rename_with_id.sh
-#
-# 关于 --type 参数（重要）
-#   - --type 是一个“可选透传参数”，仅在用户显式指定时才会传给
-#     media_list.sh
-#   - 未指定 --type 时：
-#       * 本脚本不会向 media_list.sh 传 --type
-#       * 实际筛选策略完全由 media_list.sh 的默认行为决定
-#   - 指定 --type 时：
-#       * 可选值：video | audio | media
-#       * 仅用于限制目录模式下被处理的文件类型
-#
-# 设计原则
-#   - 本脚本不擅自决定“默认类型”，避免与 media_list.sh 的默认策略
-#     发生隐性耦合
-#   - 所有“是否改名”的判断逻辑均下沉至 yt_rename_with_id.sh
-#
-# 依赖脚本（默认与本脚本位于同一目录）
-#   - media_list.sh          （必需：列出媒体文件）
-#   - yt_rename_with_id.sh   （必需：执行实际改名）
-#
-# 用法
-#   YouTube 视频改名助手.sh <文件或目录>
-#     [--type video|audio|media]   # 仅目录模式生效
-# =============================================================================
-
-set -Eeo pipefail
 IFS=$'\n\t'
+set -Eeuo pipefail
+trap 'echo "[ERROR] line $LINENO: $BASH_COMMAND" >&2' ERR
 
-# -----------------------------------------------------------------------------
-# 基础：路径与依赖检查
-# -----------------------------------------------------------------------------
+# =============================================================================
+# yt_rename_media.sh
+# =============================================================================
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-MEDIA_LIST="$SCRIPT_DIR/media_list.sh"
-YT_RENAME="$SCRIPT_DIR/yt_rename_with_id.sh"
+DIR_FILES="$SCRIPT_DIR/dir_files.sh"
+GET_SOURCE="$SCRIPT_DIR/get_source_url.sh"
+YT_PARSE_ID="$SCRIPT_DIR/yt_parse_id.sh"
+SANITIZER="$SCRIPT_DIR/sanitize_filename.sh"
 
-need_exec() {
-  local p="$1" name="$2"
-  if [ ! -x "$p" ]; then
-    echo "错误：找不到可执行的 $name（期望在同目录：$p）" >&2
-    exit 1
-  fi
-}
+# -----------------------------------------------------------------------------
+# 参数
+# -----------------------------------------------------------------------------
+INPUT=""
+OFFLINE=0
+RECURSIVE=0
+TYPE="media"
 
 usage() {
-  cat <<'EOF'
+  cat <<EOF
 用法：
-  YouTube 视频改名助手.sh <文件或目录>
-    [--type video|audio|media]
+  $0 <file|directory> [options]
+
+选项：
+  --offline        不联网获取 title
+  --recursive      递归扫描目录
+  --type media     dir_files.sh 的 --type（默认 media）
 EOF
 }
-
-need_exec "$MEDIA_LIST" "media_list.sh"
-need_exec "$YT_RENAME"  "yt_rename_with_id.sh"
 
 # -----------------------------------------------------------------------------
 # 参数解析
 # -----------------------------------------------------------------------------
-[ $# -ge 1 ] || { usage; exit 1; }
-
-TARGET=""
-TYPE=""
-TYPE_SPECIFIED=0
-
-while [ $# -gt 0 ]; do
+while (( $# > 0 )); do
   case "$1" in
-    --type)
-      shift || true
-      case "${1:-}" in
-        video|audio|media)
-          TYPE="$1"
-          TYPE_SPECIFIED=1
-          ;;
-        *)
-          echo "错误：--type 需为 video、audio 或 media" >&2
-          exit 1
-          ;;
-      esac
-      ;;
-    -h|--help)
-      usage
-      exit 0
-      ;;
+    --offline) OFFLINE=1 ;;
+    --recursive) RECURSIVE=1 ;;
+    --type) shift; TYPE="${1:-}" ;;
+    -h|--help) usage; exit 0 ;;
     -*)
-      echo "未知参数：$1" >&2
-      exit 1
-      ;;
+      echo "❌ 未知参数：$1" >&2
+      exit 1 ;;
     *)
-      if [ -z "$TARGET" ]; then
-        TARGET="$1"
-      else
-        echo "错误：仅支持一个路径参数，多余的：$1" >&2
-        exit 1
-      fi
+      [[ -z "$INPUT" ]] || { echo "❌ 只允许一个输入参数" >&2; exit 1; }
+      INPUT="$1"
       ;;
   esac
   shift || true
 done
 
-if [ -z "$TARGET" ]; then
-  echo "错误：未指定文件或目录" >&2
-  exit 1
-fi
-if [ ! -e "$TARGET" ]; then
-  echo "错误：找不到路径：$TARGET" >&2
-  exit 1
-fi
+[[ -n "$INPUT" ]] || { usage >&2; exit 1; }
 
 # -----------------------------------------------------------------------------
-# 单文件处理
+# INPUT_TYPE
 # -----------------------------------------------------------------------------
-process_one_file() {
-  local file="$1"
+INPUT_FILE=1
+INPUT_DIR=2
+INPUT_TYPE=0
 
-  if [ ! -f "$file" ]; then
-    echo "警告：跳过非文件路径：$file" >&2
-    return 0
-  fi
-
-  "$YT_RENAME" "$file"
-}
-
-# -----------------------------------------------------------------------------
-# 目录处理
-# -----------------------------------------------------------------------------
-process_dir() {
-  local dir="$1"
-
-  echo "扫描目录：$dir"
-  if [ "$TYPE_SPECIFIED" -eq 1 ]; then
-    echo "类型过滤：$TYPE"
-  else
-    echo "类型过滤：<未指定>（使用 media_list.sh 的默认策略）"
-  fi
-
-  local list_cmd=( "$MEDIA_LIST" "$dir" )
-  if [ "$TYPE_SPECIFIED" -eq 1 ]; then
-    list_cmd+=( --type "$TYPE" )
-  fi
-
-  mapfile -t media_files < <("${list_cmd[@]}")
-
-  local total="${#media_files[@]}"
-  if [ "$total" -eq 0 ]; then
-    echo "没有找到媒体文件"
-    return 0
-  fi
-
-  local i
-  for ((i=0; i<total; i++)); do
-    local media="${media_files[$i]}"
-    [ -z "${media// }" ] && continue
-
-    echo
-    echo "$((i + 1))/$total $media"
-    process_one_file "$media"
-  done
-}
-
-# -----------------------------------------------------------------------------
-# 主入口
-# -----------------------------------------------------------------------------
-if [ -f "$TARGET" ]; then
-  echo "1/1 $TARGET"
-  process_one_file "$TARGET"
-elif [ -d "$TARGET" ]; then
-  process_dir "$TARGET"
+if [[ -f "$INPUT" ]]; then
+  INPUT_TYPE="$INPUT_FILE"
+elif [[ -d "$INPUT" ]]; then
+  INPUT_TYPE="$INPUT_DIR"
 else
-  echo "错误：不支持的路径类型：$TARGET" >&2
+  echo "❌ 无法识别的输入：$INPUT" >&2
   exit 1
 fi
+
+# -----------------------------------------------------------------------------
+# 状态定义
+# -----------------------------------------------------------------------------
+STATE_OK=0
+STATE_HAS_ID=1
+
+# -----------------------------------------------------------------------------
+# 数据基座
+# -----------------------------------------------------------------------------
+files=()
+filenames=()
+exts=()
+urls=()
+ids=()
+states=()
+
+# -----------------------------------------------------------------------------
+# 工具函数
+# -----------------------------------------------------------------------------
+add_file() {
+  local file="$1" base name ext dir
+
+  dir="$(cd "$(dirname "$file")" && pwd)"
+  base="$(basename "$file")"
+  name="${base%.*}"
+  ext="${base##*.}"
+
+  files+=( "$dir/$base" )
+  filenames+=( "$name" )
+  exts+=( "$ext" )
+  states+=( "$STATE_OK" )
+}
+
+# -----------------------------------------------------------------------------
+# 文件枚举
+# -----------------------------------------------------------------------------
+case "$INPUT_TYPE" in
+  "$INPUT_FILE")
+    add_file "$INPUT"
+    ;;
+  "$INPUT_DIR")
+    cmd=( "$DIR_FILES" "$INPUT" "--type" "$TYPE" )
+    [[ "$RECURSIVE" -eq 1 ]] && cmd+=( "--recursive" )
+
+    while IFS= read -r f; do
+      add_file "$f"
+    done < <("${cmd[@]}")
+    ;;
+esac
+
+# -----------------------------------------------------------------------------
+# URL / ID 构建 + state 修正
+# -----------------------------------------------------------------------------
+for ((i=0; i<${#files[@]}; i++)); do
+  file="${files[i]}"
+  base="$(basename "$file")"
+  ext="${exts[i]}"
+
+  url="$("$GET_SOURCE" --youtube "$file" 2>/dev/null || true)"
+  urls+=( "$url" )
+
+  id=""
+  if [[ -n "$url" ]]; then
+    id="$("$YT_PARSE_ID" "$url" 2>/dev/null || true)"
+    ids+=( "$id" )
+  else
+    ids+=( "" )
+  fi
+
+  # 仅当文件名明确包含：[id].ext → 标记为已处理
+  if [[ -n "$id" && "$base" == *"[$id].$ext" ]]; then
+    states[i]="$STATE_HAS_ID"
+  fi
+done
+
+maybe_fetch_online_title() {
+  local idx="$1"
+  local url title
+
+  [[ "$OFFLINE" -eq 1 ]] && return
+  [[ "${states[idx]}" -ne "$STATE_OK" ]] && return
+
+  url="${urls[idx]}"
+  [[ -n "$url" ]] || return
+
+  echo "⏳ 获取在线标题…"
+  title="$(yt-dlp --no-playlist --get-title "$url" 2>/dev/null | head -n 1 || true)"
+
+  if [[ -n "$title" ]]; then
+    filenames[idx]="$title"
+  else
+    echo "⚠ 未获取到在线标题，使用本地文件名"
+  fi
+}
+
+# -----------------------------------------------------------------------------
+# rename（仅区分 STATE_HAS_ID，其余一律修改）
+# -----------------------------------------------------------------------------
+total=${#files[@]}
+
+for ((i=0; i<total; i++)); do
+  file="${files[i]}"
+  base="$(basename "$file")"
+  dir="$(dirname "$file")"
+  ext="${exts[i]}"
+  id="${ids[i]}"
+  state="${states[i]}"
+
+  echo
+  echo "===== ($((i+1))/${total}) ====="
+
+  # 已包含 [id].ext → 仅提示，不修改
+  if [[ "$state" -eq "$STATE_HAS_ID" ]]; then
+    echo "⏭ 跳过：$base"
+    echo "ℹ 已包含 [${id}].${ext}"
+    continue
+  fi
+
+  # 👉 这里：逐条获取在线 title（如果需要）
+  maybe_fetch_online_title "$i"
+  title="${filenames[i]}"
+
+  # 其余情况：一定执行改名
+  title_safe="$("$SANITIZER" "$title")"
+  
+  if [[ -n "$id" ]]; then
+    new_name="${title_safe} [${id}].${ext}"
+  else
+    new_name="${title_safe}.${ext}"
+  fi
+
+  echo "▶ 重命名：$base"
+  echo "→ $new_name"
+
+  mv -n "$file" "$dir/$new_name"
+done
+
+echo
+echo "✔ 重命名完成"
