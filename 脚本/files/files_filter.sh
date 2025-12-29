@@ -6,7 +6,7 @@ trap 'echo "[ERROR] line $LINENO: $BASH_COMMAND" >&2' ERR
 # =============================================================================
 # files_filter.sh
 #
-# 配置文件（与本脚本同目录）：files_types.conf
+# 配置文件（与本脚本同目录）：files_filter.sh.conf
 # 兼容 Bash 3.2；不使用 eval；不使用关联数组；避免 Bash 3.2 + set -u 坑。
 #
 # 配置契约（唯一真源）：
@@ -149,7 +149,7 @@ done
 # 读取配置（同目录，一次性）
 # -----------------------------------------------------------------------------
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CONF_PATH="$SCRIPT_DIR/files_types.conf"
+CONF_PATH="$SCRIPT_DIR/files_filter.sh.conf"
 
 if [[ ! -f "$CONF_PATH" ]]; then
   echo "❌ 缺少配置文件：$CONF_PATH" >&2
