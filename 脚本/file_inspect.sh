@@ -9,7 +9,7 @@ trap 'echo "[ERROR] line $LINENO: $BASH_COMMAND" >&2' ERR
 # 域模型：
 #   - 基础域（默认启用）：
 #       abs_path basename filename ext size mtime
-#   - 媒体域（--media）：
+#   - 媒体域（--video）：
 #       duration codec bitrate width height fps sample_rate channels
 #
 # 规则：
@@ -24,7 +24,7 @@ usage() {
   $(basename "$0") <file|dir> [options]
 
 选项：
-  --media
+  --video
       启用媒体域解析（调用 ffprobe）
 
   --select field1,field2,...
@@ -54,7 +54,7 @@ require_executable() {
 # 字段定义（单一真源）
 # -----------------------------------------------------------------------------
 BASE_FIELDS=(abs_path basename filename ext size mtime)
-MEDIA_FIELDS=(duration codec bitrate width height fps sample_rate channels)
+VIDEO_FIELDS=(duration codec bitrate width height fps sample_rate channels)
 
 ALL_FIELDS=( "${BASE_FIELDS[@]}" )
 
@@ -62,14 +62,14 @@ ALL_FIELDS=( "${BASE_FIELDS[@]}" )
 # 参数解析
 # -----------------------------------------------------------------------------
 INPUT=""
-ENABLE_MEDIA=0
+ENABLE_VIDEO=0
 DIR_FILES_ARGS=()
 SELECT_FIELDS=()
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    --media)
-      ENABLE_MEDIA=1
+    --video)
+      ENABLE_VIDEO=1
       shift
       ;;
     --select)
@@ -108,10 +108,10 @@ done
 # -----------------------------------------------------------------------------
 # 域启用
 # -----------------------------------------------------------------------------
-if [ "$ENABLE_MEDIA" -eq 1 ]; then
-  ALL_FIELDS+=( "${MEDIA_FIELDS[@]}" )
+if [ "$ENABLE_VIDEO" -eq 1 ]; then
+  ALL_FIELDS+=( "${VIDEO_FIELDS[@]}" )
   command -v ffprobe >/dev/null 2>&1 || {
-    echo "❌ 启用 --media 需要 ffprobe" >&2
+    echo "❌ 启用 --video 需要 ffprobe" >&2
     exit 1
   }
 fi
@@ -157,7 +157,7 @@ else
   exit 1
 fi
 
-probe_media() {
+probe_video() {
   local file="$1"
 
   # 优先从 video stream 取（webm / mkv 更可靠）
@@ -195,7 +195,7 @@ for path in "${files[@]}"; do
   sample_rate=""
   channels=""
 
-  if [ "$ENABLE_MEDIA" -eq 1 ]; then
+  if [ "$ENABLE_VIDEO" -eq 1 ]; then
     while IFS='=' read -r key value; do
       case "$key" in
         duration)     duration="$value" ;;
@@ -207,7 +207,7 @@ for path in "${files[@]}"; do
         sample_rate)  sample_rate="$value" ;;
         channels)     channels="$value" ;;
       esac
-    done < <(probe_media "$path")
+    done < <(probe_video "$path")
   fi
 
   declare -A row=(

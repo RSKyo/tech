@@ -32,7 +32,7 @@ FILE_INSPECT="$SCRIPT_DIR/file_inspect.sh"
 }
 
 # -----------------------------------------------------------------------------
-# 参数解析：只关心 --select，其余全部转发
+# 参数解析：脚本参数全部转发给 file_inspect.sh， 但需要特殊处理 --select
 # -----------------------------------------------------------------------------
 UPSTREAM_ARGS=()
 HAS_SELECT=0
@@ -55,6 +55,7 @@ done
 
 ABS_PATH_COL=1
 
+# 有 --select 时，确保包含 abs_path
 if [[ "$HAS_SELECT" -eq 1 ]]; then
   # 如果 select 中不包含 abs_path，则临时插入
   if [[ ! ",$SELECT_VALUE," =~ ,abs_path, ]]; then
