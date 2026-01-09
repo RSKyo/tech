@@ -1,4 +1,10 @@
 #!/usr/bin/env bash
+# =============================================================================
+# SHID: R0BCnzp6
+# DO NOT REMOVE OR MODIFY THIS BLOCK.
+# Used for script identity / indexing.
+# =============================================================================
+
 IFS=$'\n\t'
 set -Eeuo pipefail
 trap 'echo "[ERROR] line $LINENO: $BASH_COMMAND" >&2' ERR
@@ -13,8 +19,8 @@ trap 'echo "[ERROR] line $LINENO: $BASH_COMMAND" >&2' ERR
 #   - 不使用 yt-dlp
 #   - 不抽帧（不使用 1/2/3）
 #   - 支持 argv / stdin（管道）
-#   - 通过 yt_id.sh 本地解析 videoId
-#   - 可选 --with-title，标题通过 sanitize_string.sh 清洗
+#   - 使用 yt_extract_id 提取 videoId
+#   - 可选 --with-title，标题通过 sanitize_string 清洗
 #
 # 尝试顺序：
 #   尺寸：maxresdefault → sddefault → hqdefault
@@ -30,27 +36,25 @@ trap 'echo "[ERROR] line $LINENO: $BASH_COMMAND" >&2' ERR
 # =============================================================================
 
 # ---------------------------------------------------------------------------
-# 常量
+# 路径
 # ---------------------------------------------------------------------------
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-YT_ID_CMD="$SCRIPT_DIR/yt_id.sh"
-SANITIZE_CMD="$SCRIPT_DIR/sanitize_string.sh"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null && pwd)"
+ROOT_DIR="$(cd "$SCRIPT_DIR/.." >/dev/null && pwd)"
 
+# ---------------------------------------------------------------------------
+# source 能力模块（函数级依赖）
+# ---------------------------------------------------------------------------
+source "$ROOT_DIR/source/yt_extract_id.source.sh"
+source "$ROOT_DIR/source/sanitize_string.source.sh"
+
+# ---------------------------------------------------------------------------
+# 业务常量
+# ---------------------------------------------------------------------------
 SIZES=(maxresdefault sddefault hqdefault)
 EXTS=(jpg webp)
 
 # ---------------------------------------------------------------------------
-# dependency check
-# ---------------------------------------------------------------------------
-for dep in "$YT_ID_CMD" "$SANITIZE_CMD"; do
-  if [[ ! -x "$dep" ]]; then
-    echo "[ERROR] dependency not found or not executable: $dep" >&2
-    exit 1
-  fi
-done
-
-# ---------------------------------------------------------------------------
-# optional dependency check (jq for --with-title)
+# optional dependency: jq（仅 --with-title 使用）
 # ---------------------------------------------------------------------------
 HAS_JQ=0
 if command -v jq >/dev/null 2>&1; then
@@ -119,14 +123,12 @@ done
 mkdir -p "$OUT_DIR"
 
 # ---------------------------------------------------------------------------
-# 获取 title
+# 获取 title（仅在 --with-title 且 jq 可用时）
 # ---------------------------------------------------------------------------
 fetch_title() {
   local url="$1"
 
-  if [[ $HAS_JQ -ne 1 ]]; then
-    return 1
-  fi
+  [[ $HAS_JQ -eq 1 ]] || return 1
 
   curl -sL \
     "https://www.youtube.com/oembed?format=json&url=$url" \
@@ -134,7 +136,7 @@ fetch_title() {
 }
 
 # ---------------------------------------------------------------------------
-# 下载单个 videoId 的封面（修正版）
+# 下载单个 videoId 的封面
 # ---------------------------------------------------------------------------
 download_thumbnail() {
   local id="$1"
@@ -147,27 +149,28 @@ download_thumbnail() {
   if [[ $WITH_TITLE -eq 1 ]]; then
     title="$(fetch_title "$url" || true)"
     if [[ -n "$title" ]]; then
-      safe_title="$(printf '%s\n' "$title" | "$SANITIZE_CMD")"
+      safe_title="$(sanitize_string "$title")"
     else
       echo "[WARN] title fetch failed, fallback to id: $id" >&2
     fi
   fi
 
-  # --- 最终文件名前缀（关键修复点） ---
+  # --- 文件名前缀 ---
   if [[ -n "$safe_title" ]]; then
     outfile_base="$OUT_DIR/$safe_title [$id]"
   else
     outfile_base="$OUT_DIR/[$id]"
   fi
 
-  # --- 已存在检查（只做一次） ---
-  for ext in "${EXTS[@]}"; do
-    outfile="$outfile_base.$ext"
-    if [[ -f "$outfile" && $FORCE -eq 0 ]]; then
-      echo "[SKIP] $id -> $outfile" >&2
-      return 0
-    fi
-  done
+  # --- 已存在检查 ---
+  if [[ $FORCE -eq 0 ]]; then
+    for ext in "${EXTS[@]}"; do
+      if [[ -f "$outfile_base.$ext" ]]; then
+        echo "[SKIP] $id -> $outfile_base.$ext" >&2
+        return 0
+      fi
+    done
+  fi
 
   # --- 下载循环 ---
   for size in "${SIZES[@]}"; do
@@ -195,7 +198,7 @@ if [[ ${#URL_ARGS[@]} -gt 0 ]]; then
     [[ -z "$url" ]] && continue
     had_input=1
 
-    if ! id="$("$YT_ID_CMD" "$url" 2>/dev/null)"; then
+    if ! id="$(yt_extract_id "$url")"; then
       echo "[WARN] invalid url: $url" >&2
       continue
     fi
@@ -209,7 +212,7 @@ else
     [[ -z "$url" ]] && continue
     had_input=1
 
-    if ! id="$("$YT_ID_CMD" "$url" 2>/dev/null)"; then
+    if ! id="$(yt_extract_id "$url")"; then
       echo "[WARN] invalid url: $url" >&2
       continue
     fi

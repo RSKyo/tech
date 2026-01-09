@@ -1,4 +1,10 @@
 #!/usr/bin/env bash
+# =============================================================================
+# SHID: pL2HPuaY
+# DO NOT REMOVE OR MODIFY THIS BLOCK.
+# Used for script identity / indexing.
+# =============================================================================
+
 IFS=$'\n\t'
 set -Eeuo pipefail
 trap 'echo "[ERROR] line $LINENO: $BASH_COMMAND" >&2' ERR
