@@ -44,8 +44,9 @@ ROOT_DIR="$(cd "$SCRIPT_DIR/.." >/dev/null && pwd)"
 # ---------------------------------------------------------------------------
 # source 能力模块（函数级依赖）
 # ---------------------------------------------------------------------------
-source "$ROOT_DIR/source/yt_extract_id.source.sh"
 source "$ROOT_DIR/source/sanitize_string.source.sh"
+source "$ROOT_DIR/source/yt_extract_id.source.sh"
+source "$ROOT_DIR/source/yt_fetch_title.source.sh"
 
 # ---------------------------------------------------------------------------
 # 业务常量
@@ -123,19 +124,6 @@ done
 mkdir -p "$OUT_DIR"
 
 # ---------------------------------------------------------------------------
-# 获取 title（仅在 --with-title 且 jq 可用时）
-# ---------------------------------------------------------------------------
-fetch_title() {
-  local url="$1"
-
-  [[ $HAS_JQ -eq 1 ]] || return 1
-
-  curl -sL \
-    "https://www.youtube.com/oembed?format=json&url=$url" \
-  | jq -r '.title // empty'
-}
-
-# ---------------------------------------------------------------------------
 # 下载单个 videoId 的封面
 # ---------------------------------------------------------------------------
 download_thumbnail() {
@@ -146,8 +134,8 @@ download_thumbnail() {
   local size ext img_url
 
   # --- title 处理 ---
-  if [[ $WITH_TITLE -eq 1 ]]; then
-    title="$(fetch_title "$url" || true)"
+  if [[ $WITH_TITLE -eq 1 && $HAS_JQ -eq 1 ]]; then
+    title="$(yt_fetch_title "$url" || true)"
     if [[ -n "$title" ]]; then
       safe_title="$(sanitize_string "$title")"
     else

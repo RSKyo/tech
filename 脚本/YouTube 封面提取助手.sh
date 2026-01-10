@@ -6,118 +6,102 @@ trap 'echo "[ERROR] line $LINENO: $BASH_COMMAND" >&2' ERR
 # =============================================================================
 # YouTube 封面提取助手.sh
 #
-# 纯入口封装脚本（wrapper）
+# 功能定位：
+#   YouTube 封面批量提取的入口脚本（调度器）
 #
-# 功能：
-#   - 接收一个 YouTube 地址 或 一个地址列表文件
-#   - 通过 yt/yt_urls.sh 生成 URL 列表
-#   - 逐个调用 yt/yt_thumbnail.sh
-#   - 在上游显示处理进度 [i/total]
-#
-# 特殊规则：
-#   - 若未显式指定 --out，则自动构造：
-#       --out "$SCRIPT_DIR/thumbnail"
-#
-# 设计原则：
-#   - 不联网
-#   - 不解析 URL
-#   - 不处理封面细节
-#   - 不改动 yt_thumbnail.sh
+# 参数规则：
+#   - 接收与 yt_thumbnail.sh 完全一致的参数
+#   - 除 --out 外，所有参数原样传递给 yt_thumbnail.sh
+#   - 若用户未显式传递 --out：
+#       默认使用：本脚本所在目录下的 thumbnail/
+#     这样可以避免 yt_thumbnail.sh 在其自身目录中
+#     自动创建 thumbnail/ 目录
 # =============================================================================
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-YT_DIR="$SCRIPT_DIR/yt"
+# -----------------------------------------------------------------------------
+# 路径定位（本脚本位于 ROOT）
+# -----------------------------------------------------------------------------
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null && pwd)"
+ROOT_DIR="$SCRIPT_DIR"
 
-YT_URLS_CMD="$YT_DIR/yt_urls.sh"
-YT_THUMB_CMD="$YT_DIR/yt_thumbnail.sh"
+# -----------------------------------------------------------------------------
+# 通过 SHID 注入依赖命令
+# -----------------------------------------------------------------------------
+source "$ROOT_DIR/source/resolve_deps.source.sh"
 
-# ---------------------------------------------------------------------------
-# dependency check
-# ---------------------------------------------------------------------------
-missing=0
+resolve_deps \
+  ROOT_DIR="$ROOT_DIR" \
+  YT_URLS_CMD=Yjd7EHuw \
+  YT_THUMB_CMD=R0BCnzp6
 
-check_dep() {
-  local f="$1"
-  if [[ ! -f "$f" ]]; then
-    echo "[ERROR] missing required script: $f" >&2
-    missing=1
-  elif [[ ! -x "$f" ]]; then
-    echo "[ERROR] script not executable: $f" >&2
-    missing=1
-  fi
-}
-
-check_dep "$YT_URLS_CMD"
-check_dep "$YT_THUMB_CMD"
-
-[[ $missing -eq 0 ]] || exit 1
-
-# ---------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
 # usage
-# ---------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
 usage() {
   local cmd
   cmd="$(basename "$0")"
 
   cat >&2 <<EOF
-Usage:
-  $cmd <url> [options...]
-  $cmd <urls.txt> [options...]
+用法：
+  $cmd <input> [yt_thumbnail.sh 的参数...]
 
-Description:
-  Wrapper script for extracting YouTube thumbnails.
+说明：
+  <input>：
+    - 单个 YouTube URL
+    - URL 列表文件（.txt）
+    - 单个已下载的视频文件
+    - 指定目录（仅当前层）
 
-Notes:
-  If --out is not specified, it defaults to:
-    $SCRIPT_DIR/thumbnail/
-
-Options:
-  All other options are passed through to yt_thumbnail.sh, such as:
-    --with-title
-    --force
+参数传递规则：
+  - 除 --out 外，其余参数将原样传递给 yt_thumbnail.sh
+  - 若未指定 --out，则默认使用：
+      $SCRIPT_DIR/thumbnail/
 EOF
 }
 
-# ---------------------------------------------------------------------------
-# argument handling
-# ---------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+# 参数处理
+# -----------------------------------------------------------------------------
 [[ $# -ge 1 ]] || { usage; exit 1; }
 
 INPUT="$1"
 shift
 
-# ---------------------------------------------------------------------------
-# detect --out
-# ---------------------------------------------------------------------------
+# 剩余参数：视为 yt_thumbnail.sh 的参数
+THUMB_ARGS=( "$@" )
+
+# -----------------------------------------------------------------------------
+# --out 兜底逻辑（唯一的参数干预点）
+# -----------------------------------------------------------------------------
+# 目的：
+#   若不指定 --out，避免 yt_thumbnail.sh
+#   在其自身目录下创建 thumbnail/
 HAS_OUT=0
-for arg in "$@"; do
+for arg in "${THUMB_ARGS[@]}"; do
   if [[ "$arg" == "--out" ]]; then
     HAS_OUT=1
     break
   fi
 done
 
-THUMB_ARGS=("$@")
-
-# 若未指定 --out，则由入口脚本兜底构造
 if [[ $HAS_OUT -eq 0 ]]; then
-  THUMB_ARGS=(--out "$SCRIPT_DIR/thumbnail" "${THUMB_ARGS[@]}")
+  THUMB_ARGS=( --out "$SCRIPT_DIR/thumbnail" "${THUMB_ARGS[@]}" )
 fi
 
-# ---------------------------------------------------------------------------
-# expand URLs (一次性获取，用于统计 total)
-# ---------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+# 解析并收集 YouTube URL 列表
+# -----------------------------------------------------------------------------
 mapfile -t URLS < <("$YT_URLS_CMD" "$INPUT")
 
 total=${#URLS[@]}
 if [[ $total -eq 0 ]]; then
-  echo "[WARN] no valid URLs found" >&2
+  echo "[WARN] 未解析到任何有效的 YouTube URL" >&2
   exit 0
 fi
 
-# ---------------------------------------------------------------------------
-# main loop with progress
-# ---------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+# 主处理循环（带进度提示）
+# -----------------------------------------------------------------------------
 idx=0
 for url in "${URLS[@]}"; do
   idx=$((idx + 1))
